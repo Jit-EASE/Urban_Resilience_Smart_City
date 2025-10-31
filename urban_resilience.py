@@ -664,7 +664,7 @@ with colB:
 
 # ---------------- RL Panel ----------------
 st.markdown("---")
-st.markdown("### Self-Learning (Contextual RL)")
+st.markdown("### Self-Learning")
 actions = [
     "Temporary pumps & barriers",
     "Bus reroute + dynamic headways",
