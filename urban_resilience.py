@@ -42,10 +42,11 @@ except Exception:
     PdfReader = None
 
 # 
+# OpenAI
 try:
-    from  import 
+    from openai import OpenAI
 except Exception:
-     = None
+    OpenAI = None
 
 # Optimisation (MILP)
 try:
