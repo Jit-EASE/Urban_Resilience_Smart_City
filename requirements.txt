@@ -1,0 +1,11 @@
+streamlit>=1.37
+streamlit-folium>=0.18
+folium>=0.15
+pypdf>=4.2
+pandas>=2.0
+numpy>=1.25
+openai>=1.40
+requests>=2.31
+scikit-learn>=1.4
+pulp>=2.8
+python-dotenv>=1.0
