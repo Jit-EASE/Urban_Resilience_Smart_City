@@ -1,7 +1,6 @@
 # UNIC Urban Resilience & Smart Cities — Ireland (v2)
 # Streamlit App — Agentic RAG + Knowledge Graph + MILP Optimiser + Contextual RL + Folium Map
 # -------------------------------------------------------------------------------------------
-# Knowledge Graph, and sections 2,3,4,5,6,9,10.
 # Highlights
 # - Knowledge Graph (in‑memory) linking Goals→Targets→Measures→Datasets→Tools→Stakeholders with query helpers
 # - Multi‑agent orchestration (Planner, Verifier, Equity/Cobenefits, Explainer, Counterfactual) with structured outputs
