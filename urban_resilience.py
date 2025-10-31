@@ -615,7 +615,7 @@ with col_right:
 
 # ---------------- Optimisation Panel ----------------
 st.markdown("---")
-st.markdown("### Optimisation — Portfolio under constraints (MILP)")
+st.markdown("### Optimisation — Portfolio under constraints")
 colA, colB = st.columns([1.0, 2.0])
 with colA:
     st.caption("Objective: maximise resilience + (equity_weight*equity)")
@@ -631,7 +631,7 @@ with colB:
 
 # ---------------- RL Panel ----------------
 st.markdown("---")
-st.markdown("### Self-Learning (Contextual RL)")
+st.markdown("### Self-Learning")
 actions = [
     "Temporary pumps & barriers",
     "Bus reroute + dynamic headways",
@@ -676,7 +676,7 @@ with colx:
     state = st.radio("Decision state", ["Draft","Reviewed","Approved"], horizontal=True)
 with coly:
     st.subheader("Model Card (Planner)")
-    st.markdown("- Model:  \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
+    st.markdown("- Model: Agentic (RAG+KE) AI \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
 with colz:
     st.subheader("Data Sheet (Evidence)")
     st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: show fetch timestamps\n- Known gaps: mobility GTFS-RT, flood gauges (to wire)")
