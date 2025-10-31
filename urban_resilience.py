@@ -3,13 +3,13 @@
 # -------------------------------------------------------------------------------------------
 # This version adds the items you requested: Knowledge Graph, and sections 2,3,4,5,6,9,10.
 # Highlights
-# - Knowledge Graph (in‑memory) linking Goals→Targets→Measures→Datasets→Tools→Stakeholders with query helpers
-# - Multi‑agent orchestration (Planner, Verifier, Equity/Cobenefits, Explainer, Counterfactual) with structured outputs
-# - Optimisation: MILP portfolio selector (PuLP) with budget/emissions/equity constraints + quantum‑inspired toggle (placeholder)
+# - Knowledge Graph (in-memory) linking Goals→Targets→Measures→Datasets→Tools→Stakeholders with query helpers
+# - Multi-agent orchestration (Planner, Verifier, Equity/Cobenefits, Explainer, Counterfactual) with structured outputs
+# - Optimisation: MILP portfolio selector (PuLP) with budget/emissions/equity constraints + quantum-inspired toggle (placeholder)
 # - RL: Contextual bandit with state features + safety gate via Verifier; learning dashboard
-# - Geospatial: LayerControl overlays (Hospitals/Shelters/Substations demo), Draw tool for what‑if lines/areas, marker clustering
+# - Geospatial: LayerControl overlays (Hospitals/Shelters/Substations demo), Draw tool for what-if lines/areas, marker clustering
 # - Governance/EU AI Act posture: model/data cards, audit states (Draft→Reviewed→Approved), immutable run logs
-# - Multi‑city scaling: City profiles (Dublin, Cork, Limerick, Galway, Waterford) with defaults
+# - Multi-city scaling: City profiles (Dublin, Cork, Limerick, Galway, Waterford) with defaults
 # - Engineering polish: config block, stricter error handling, caching, requirements list
 #
 # Quick start
@@ -111,7 +111,7 @@ CITY_PROFILES = {
     },
     "Galway": {
         "focus_layers": ["hospitals", "bus_routes"],
-        "default_goal": "Waterway micro‑hydro integration with mobility continuity during heavy rain.",
+        "default_goal": "Waterway micro-hydro integration with mobility continuity during heavy rain.",
     },
     "Waterford": {
         "focus_layers": ["shelters", "bus_routes"],
@@ -234,62 +234,17 @@ class KnowledgeGraph:
     def demo(county: str) -> "KnowledgeGraph":
         kg = KnowledgeGraph()
         goal = f"{county}: Reduce pluvial flood disruption & protect access"
-        kg.add(goal, "targets", "-30% 10‑yr flood damages", "Goal", "Target")
+        kg.add(goal, "targets", "-30% 10-yr flood damages", "Goal", "Target")
         kg.add(goal, "targets", "<=0 ΔtCO₂e", "Goal", "Target")
-        kg.add("-30% 10‑yr flood damages", "measured_by", "Service-hours preserved", "Target", "Measure")
+        kg.add("-30% 10-yr flood damages", "measured_by", "Service-hours preserved", "Target", "Measure")
         kg.add("<=0 ΔtCO₂e", "measured_by", "Emissions delta", "Target", "Measure")
-        kg.add("Service-hours preserved", "requires", "Bus headways (GTFS‑RT)", "Measure", "Dataset")
+        kg.add("Service-hours preserved", "requires", "Bus headways (GTFS-RT)", "Measure", "Dataset")
         kg.add("Emissions delta", "requires", "Energy mix (EirGrid)", "Measure", "Dataset")
-        kg.add("Bus headways (GTFS‑RT)", "queried_by", "MobilityAgent", "Dataset", "Tool")
+        kg.add("Bus headways (GTFS-RT)", "queried_by", "MobilityAgent", "Dataset", "Tool")
         kg.add("Energy mix (EirGrid)", "queried_by", "EnergyAgent", "Dataset", "Tool")
         kg.add("MobilityAgent", "owned_by", "NTA/TFI", "Tool", "Stakeholder")
         kg.add("EnergyAgent", "owned_by", "EirGrid", "Tool", "Stakeholder")
         return kg
-
-# ---------------- Agentic Layer ----------------
-class Agents:
-    def __init__(self):
-        self.client = OpenAI(api_key=CONFIG["openai_key"]) if (OpenAI and CONFIG["openai_key"]) else None
-        self.model = CONFIG["openai_model"]
-
-    def _chat(self, messages, temperature=0.2, max_tokens=900) -> str:
-        if not self.client:
-            return "[OpenAI key missing]"
-        r = self.client.chat.completions.create(model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens)
-        return r.choices[0].message.content
-
-    def planner(self, goal: str, county: str, evidence_snips: List[str], jury_score: float) -> str:
-        sys = (
-            "You are a Planner Agent for Irish urban resilience. Output JSON with keys: "
-            "objectives, constraints, actions, kpis, checklist48h, notes. Keep budget/emissions/equity explicit."
-        )
-        ctx = "\n\n".join([f"[E{i+1}] {s}" for i, s in enumerate(evidence_snips)])
-        user = f"County: {county}\nJuryConsensus: {jury_score:.2f}\nGoal: {goal}\nEvidence:\n{ctx}"
-        return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.1)
-
-    def verifier(self, plan_json: str, evidence_snips: List[str]) -> str:
-        sys = (
-            "You are a Verifier Agent. Return a JSON with policy_checks: [{name, pass, reason, citations}], "
-            "risk_flags:[], required_data:[], and overall: pass|fail."
-        )
-        ctx = "\n\n".join([f"[E{i+1}] {s}" for i, s in enumerate(evidence_snips)])
-        user = f"PlanJSON:\n{plan_json}\n\nEvidence:\n{ctx}"
-        return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.0)
-
-    def equity(self, plan_json: str) -> str:
-        sys = "Equity/Cobenefits Agent. Given Plan JSON, output JSON with equity_score(0-1), hotspots[], mitigations[]."
-        return self._chat([{"role":"system","content":sys},{"role":"user","content":plan_json}], temperature=0.1)
-
-    def counterfactuals(self, plan_json: str) -> str:
-        sys = "Counterfactual Agent. Produce JSON list of rejected options with reasons (cost/emissions/equity/feasibility)."
-        return self._chat([{"role":"system","content":sys},{"role":"user","content":plan_json}], temperature=0.2)
-
-    def explainer(self, plan_json: str, citations: List[Tuple[str,int]]) -> str:
-        sys = "Explainer Agent. Output a brief (markdown) for the public. Include a numbered citations list (doc#chunk)."
-        cites = "\n".join([f"{i+1}. {d}#${c}" for i,(d,c) in enumerate(citations)])
-        user = f"Plan:\n{plan_json}\n\nCitations:\n{cites}"
-        return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.2)
-
 
 # ---------------- Official Data Connectors (stubs with simulated fallback) ----------------
 import requests
@@ -309,6 +264,17 @@ def fetch_epa_air_quality(county: str) -> Dict[str, Any]:
 def fetch_cso_population(county: str) -> Dict[str, Any]:
     base = {"Dublin":1500000, "Cork":600000, "Limerick":210000, "Galway":280000, "Waterford":127000}
     return {"population": int(base.get(county, int(np.random.randint(70000, 400000))))}
+
+# ---------------- Cached popup wrapper (debounce reruns & batch cache) ----------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_popup(place: str, layer: str, signals_tuple: Tuple[float, int, int],
+                 extra_tuple: Tuple[Tuple[str, Any], ...], online: bool) -> str:
+    signals = {"rain_mm_next24h": signals_tuple[0], "aqi": signals_tuple[1], "population": signals_tuple[2]}
+    extra = dict(extra_tuple)
+    helper = NLPPopup()
+    if not online:
+        helper.client = None  # force fallback to avoid network calls
+    return helper.generate(place, layer, signals, extra)
 
 # ---------------- Map NLP helper (dynamic explanations for nodes/legs) ----------------
 class NLPPopup:
@@ -332,13 +298,13 @@ class NLPPopup:
         fallback = (
             f"<b>{place}</b> — {layer.title()}<br/>"
             f"Context: rain≈{rain_disp}, AQI={kpis['aqi']}, pop≈{pop_disp}. "
-            f"Prioritise continuity, low‑emission routing and equitable access."
+            f"Prioritise continuity, low-emission routing and equitable access."
         )
         if not self.client:
             return fallback
         try:
             prompt = (
-                "Write one concise sentence (<= 28 words) as a popup for an Irish urban‑resilience map. "
+                "Write one concise sentence (<= 28 words) as a popup for an Irish urban-resilience map. "
                 "Be specific and practical. Variables: place, layer, rain_mm_24h, AQI, population, extras."
             )
             msg = [
@@ -415,10 +381,25 @@ def solve_portfolio(interventions: List[Intervention], budget_m: float, emission
 st.title(APP_TITLE)
 with st.sidebar:
     st.markdown("### Controls")
-    city = st.selectbox("Smart city", options=list(CITY_PROFILES.keys()), index=0)
-    county = st.selectbox("County", options=sorted(COUNTIES.keys()), index=sorted(COUNTIES.keys()).index(city) if city in COUNTIES else 0)
+
+    # Stable options
+    _city_options = list(CITY_PROFILES.keys())
+    _county_options = sorted(COUNTIES.keys())
+
+    # City select (stable key)
+    city = st.selectbox("Smart city", options=_city_options, index=0, key="city")
+
+    # Initialise county once, then stop overriding it on every rerun
+    if "county" not in st.session_state:
+        st.session_state["county"] = city if city in COUNTIES else _county_options[0]
+    # If user flips city and county was never manually changed, sync once
+    if st.session_state.get("county") not in COUNTIES:
+        st.session_state["county"] = city if city in COUNTIES else _county_options[0]
+
+    county = st.selectbox("County", options=_county_options, index=_county_options.index(st.session_state["county"]), key="county")
+
     default_goal = CITY_PROFILES[city]["default_goal"]
-    goal = st.text_area("Resilience goal", value=default_goal, height=80)
+    goal = st.text_area("Resilience goal", value=default_goal, height=80, key="goal")
 
     st.markdown("**Scenario constraints**")
     budget_m = st.slider("Budget (million €)", 1.0, 100.0, 25.0, 1.0)
@@ -433,6 +414,12 @@ with st.sidebar:
     do_explain = st.checkbox("Public Brief", True)
     run_button = st.button("Run Scenario Planner", type="primary")
 
+    use_online_nlp = st.checkbox(
+        "Use online NLP for popups (OpenAI)",
+        value=False,
+        help="Turn ON to call OpenAI for popup text. OFF uses fast local fallback."
+    )
+
 # ---------------- Map ----------------
 col_map, col_right = st.columns([1.25, 1.75])
 with col_map:
@@ -444,6 +431,7 @@ with col_map:
     epa = fetch_epa_air_quality(county)
     cso = fetch_cso_population(county)
     signals = {"rain_mm_next24h": met.get("rain_mm_next24h", 0.0), "aqi": epa.get("aqi", 0), "population": cso.get("population", 0)}
+    signals_tuple = (signals["rain_mm_next24h"], signals["aqi"], signals["population"])
     nlp = NLPPopup()
 
     fmap = folium.Map(location=[lat, lon], zoom_start=10, tiles="CartoDB positron")
@@ -463,41 +451,44 @@ with col_map:
 
     # Hospitals
     for p in jitter(6, 0.03):
-        html = nlp.generate(county, "hospital", signals)
+        html = cached_popup(county, "hospital", signals_tuple, tuple(), use_online_nlp)
         folium.Marker(p, tooltip="Hospital", popup=folium.Popup(html, max_width=320), icon=folium.Icon(icon="plus", prefix="fa", color="red")).add_to(groups["hospitals"])
         if draw_legs:
-            leg_html = nlp.generate(county, "leg: centroid→hospital", signals, {"distance_km": round(math.dist([lat,lon],[p[0],p[1]])*110,2)})
+            _d = {"distance_km": round(math.dist([lat, lon], [p[0], p[1]]) * 110, 2)}
+            leg_html = cached_popup(county, "leg: centroid→hospital", signals_tuple, tuple(sorted(_d.items())), use_online_nlp)
             folium.PolyLine([(lat, lon), p], weight=1.5, opacity=0.7, tooltip="Leg", popup=folium.Popup(leg_html, max_width=300)).add_to(groups["hospitals"])
 
     # Shelters (clustered)
     mc = MarkerCluster().add_to(groups["shelters"])
     for p in jitter(10, 0.05):
-        html = nlp.generate(county, "shelter", signals)
+        html = cached_popup(county, "shelter", signals_tuple, tuple(), use_online_nlp)
         folium.Marker(p, tooltip="Shelter", popup=folium.Popup(html, max_width=320), icon=folium.Icon(color="green")).add_to(mc)
         if draw_legs:
-            leg_html = nlp.generate(county, "leg: centroid→shelter", signals, {"distance_km": round(math.dist([lat,lon],[p[0],p[1]])*110,2)})
+            _d = {"distance_km": round(math.dist([lat, lon], [p[0], p[1]]) * 110, 2)}
+            leg_html = cached_popup(county, "leg: centroid→shelter", signals_tuple, tuple(sorted(_d.items())), use_online_nlp)
             folium.PolyLine([(lat, lon), p], weight=1.2, opacity=0.6, tooltip="Leg", popup=folium.Popup(leg_html, max_width=300)).add_to(groups["shelters"])
 
     # Substations
     for p in jitter(5, 0.04):
-        html = nlp.generate(county, "substation", signals)
+        html = cached_popup(county, "substation", signals_tuple, tuple(), use_online_nlp)
         folium.CircleMarker(p, radius=6, tooltip="Substation", popup=folium.Popup(html, max_width=320)).add_to(groups["substations"])
         if draw_legs:
-            leg_html = nlp.generate(county, "leg: centroid→substation", signals, {"distance_km": round(math.dist([lat,lon],[p[0],p[1]])*110,2)})
+            _d = {"distance_km": round(math.dist([lat, lon], [p[0], p[1]]) * 110, 2)}
+            leg_html = cached_popup(county, "leg: centroid→substation", signals_tuple, tuple(sorted(_d.items())), use_online_nlp)
             folium.PolyLine([(lat, lon), p], weight=1.2, dash_array="4,3", opacity=0.6, tooltip="Whisker", popup=folium.Popup(leg_html, max_width=300)).add_to(groups["substations"])
 
     # Bus route with NLP popup
     route_pts = [(lat-0.02, lon-0.06), (lat, lon), (lat+0.02, lon+0.05)]
-    route_html = nlp.generate(county, "bus route", signals, {"stops": 3})
+    route_html = cached_popup(county, "bus route", signals_tuple, tuple(sorted({"stops": 3}.items())), use_online_nlp)
     folium.PolyLine(route_pts, tooltip="Bus route", popup=folium.Popup(route_html, max_width=320)).add_to(groups["bus_routes"])
 
-    # Draw tool for what‑if
+    # Draw tool for what-if
     Draw(export=True, filename="drawn.geojson").add_to(fmap)
 
-    centroid_html = nlp.generate(county, "centroid", signals)
+    centroid_html = cached_popup(county, "centroid", signals_tuple, tuple(), use_online_nlp)
     folium.Marker([lat, lon], tooltip=f"{county}", popup=folium.Popup(centroid_html, max_width=320), icon=folium.Icon(color="blue")).add_to(fmap)
     folium.LayerControl(collapsed=False).add_to(fmap)
-    map_state = st_folium(fmap, height=560, width=None)
+    map_state = st_folium(fmap, height=560, width=None, key="mainmap")
 
 with col_right:
     st.markdown("#### Evidence, Knowledge Graph & Agents")
@@ -559,7 +550,7 @@ with col_right:
         st.markdown("##### Policy Compliance (Verifier JSON)")
         st.code(verifier_json, language="json")
     if equity_json:
-        st.markdown("##### Equity / Co‑benefits (JSON)")
+        st.markdown("##### Equity / Co-benefits (JSON)")
         st.code(equity_json, language="json")
     if counterf_json:
         st.markdown("##### Counterfactuals (JSON)")
@@ -586,13 +577,13 @@ with colB:
 
 # ---------------- RL Panel ----------------
 st.markdown("---")
-st.markdown("### Self‑Learning (Contextual RL)")
+st.markdown("### Self-Learning (Contextual RL)")
 actions = [
     "Temporary pumps & barriers",
     "Bus reroute + dynamic headways",
     "Targeted shelters & comms",
     "1 MWh community battery",
-    "Pop‑up active travel corridors",
+    "Pop-up active travel corridors",
 ]
 
 met = fetch_met_eireann_forecast(county)
@@ -634,7 +625,7 @@ with coly:
     st.markdown("- Model: OpenAI Chat \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
 with colz:
     st.subheader("Data Sheet (Evidence)")
-    st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: show fetch timestamps\n- Known gaps: mobility GTFS‑RT, flood gauges (to wire)")
+    st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: show fetch timestamps\n- Known gaps: mobility GTFS-RT, flood gauges (to wire)")
 
 # Log decisions
 DECISIONS_CSV = os.path.join(CONFIG["log_dir"], "decisions.csv")
@@ -659,7 +650,7 @@ st.markdown(
 <small>
 **Data connectors** are simulated until API keys/endpoints are configured. Replace in `fetch_*` functions (Met Éireann, EPA, CSO, NTA/TFI, EirGrid).\
 Knowledge Graph demo shows how goals link to targets, measures, datasets, tools, stakeholders.\
-MILP uses PuLP (CBC). Quantum‑inspired path left as research toggle (benchmark vs classical before use).\
+MILP uses PuLP (CBC). Quantum-inspired path left as research toggle (benchmark vs classical before use).\
 </small>
 """,
     unsafe_allow_html=True,
