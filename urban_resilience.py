@@ -578,8 +578,8 @@ if st.button("Save Decision Snapshot"):
 st.markdown(
     """
 <small>
-** Developed by Shubhoijit Bagchi.\
-K
+Developed by Shubhojit Bagchi\
+
 </small>
 """,
     unsafe_allow_html=True,
