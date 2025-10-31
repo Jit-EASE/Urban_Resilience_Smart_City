@@ -41,11 +41,11 @@ try:
 except Exception:
     PdfReader = None
 
-# OpenAI
+# 
 try:
-    from openai import OpenAI
+    from  import 
 except Exception:
-    OpenAI = None
+     = None
 
 # Optimisation (MILP)
 try:
@@ -54,7 +54,7 @@ except Exception:
     pulp = None
 
 # ---------------- CONFIG ----------------
-APP_TITLE = "UNIC Regional Resilience (Ireland) — Agentic + KG + RL"
+APP_TITLE = "Self-Learning & Reasoning Regional Resilience System — Ireland"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 CONFIG = {
@@ -675,7 +675,7 @@ with colx:
     state = st.radio("Decision state", ["Draft","Reviewed","Approved"], horizontal=True)
 with coly:
     st.subheader("Model Card (Planner)")
-    st.markdown("- Model: OpenAI Chat \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
+    st.markdown("- Model:  \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
 with colz:
     st.subheader("Data Sheet (Evidence)")
     st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: show fetch timestamps\n- Known gaps: mobility GTFS-RT, flood gauges (to wire)")
@@ -701,9 +701,7 @@ if st.button("Save Decision Snapshot"):
 st.markdown(
     """
 <small>
-**Data connectors** are simulated until API keys/endpoints are configured. Replace in `fetch_*` functions (Met Éireann, EPA, CSO, NTA/TFI, EirGrid).\
-Knowledge Graph demo shows how goals link to targets, measures, datasets, tools, stakeholders.\
-MILP uses PuLP (CBC). Quantum-inspired path left as research toggle (benchmark vs classical before use).\
+Developed by Shubhojit Bagchi.\
 </small>
 """,
     unsafe_allow_html=True,
