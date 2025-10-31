@@ -290,6 +290,7 @@ class Agents:
         user = f"Plan:\n{plan_json}\n\nCitations:\n{cites}"
         return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.2)
 
+
 # ---------------- Official Data Connectors (stubs with simulated fallback) ----------------
 import requests
 
@@ -308,6 +309,47 @@ def fetch_epa_air_quality(county: str) -> Dict[str, Any]:
 def fetch_cso_population(county: str) -> Dict[str, Any]:
     base = {"Dublin":1500000, "Cork":600000, "Limerick":210000, "Galway":280000, "Waterford":127000}
     return {"population": int(base.get(county, int(np.random.randint(70000, 400000))))}
+
+# ---------------- Map NLP helper (dynamic explanations for nodes/legs) ----------------
+class NLPPopup:
+    def __init__(self):
+        self.client = OpenAI(api_key=CONFIG["openai_key"]) if (OpenAI and CONFIG["openai_key"]) else None
+        self.model = CONFIG["openai_model"]
+
+    def generate(self, place: str, layer: str, signals: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> str:
+        extra = extra or {}
+        rain = signals.get("rain_mm_next24h") or signals.get("rain")
+        aqi = signals.get("aqi")
+        pop = signals.get("population") or signals.get("pop")
+        kpis = {
+            "rain_mm_24h": f"{rain:.1f}mm" if isinstance(rain, (int, float)) else str(rain),
+            "aqi": aqi,
+            "population": pop,
+            **{k: v for k, v in extra.items() if v is not None},
+        }
+        pop_disp = f"{int(pop):,}" if isinstance(pop, int) else (f"{int(pop):,}" if isinstance(pop, float) else str(pop))
+        rain_disp = kpis['rain_mm_24h']
+        fallback = (
+            f"<b>{place}</b> — {layer.title()}<br/>"
+            f"Context: rain≈{rain_disp}, AQI={kpis['aqi']}, pop≈{pop_disp}. "
+            f"Prioritise continuity, low‑emission routing and equitable access."
+        )
+        if not self.client:
+            return fallback
+        try:
+            prompt = (
+                "Write one concise sentence (<= 28 words) as a popup for an Irish urban‑resilience map. "
+                "Be specific and practical. Variables: place, layer, rain_mm_24h, AQI, population, extras."
+            )
+            msg = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"place={place}; layer={layer}; rain_mm_24h={kpis['rain_mm_24h']}; AQI={kpis['aqi']}; population={kpis['population']}; extras={extra}"},
+            ]
+            out = self.client.chat.completions.create(model=self.model, messages=msg, temperature=0.2, max_tokens=60)
+            text = out.choices[0].message.content.strip()
+            return f"<b>{place}</b>: {text}"
+        except Exception:
+            return fallback
 
 # ---------------- Reinforcement Learning (Contextual Bandit) ----------------
 class ContextualBandit:
@@ -382,6 +424,7 @@ with st.sidebar:
     budget_m = st.slider("Budget (million €)", 1.0, 100.0, 25.0, 1.0)
     emissions_cap = st.slider("Max additional ΔtCO₂e", -2000.0, 2000.0, 0.0, 50.0)
     equity_w = st.slider("Equity weight (0..1)", 0.0, 1.0, 0.6, 0.05)
+    draw_legs = st.checkbox("Show centroid→node legs/whiskers", value=True)
 
     st.markdown("**Agentic options**")
     do_verify = st.checkbox("Run Verifier", True)
@@ -395,6 +438,14 @@ col_map, col_right = st.columns([1.25, 1.75])
 with col_map:
     st.markdown("#### Geospatial View")
     lat, lon = COUNTIES[county]
+
+    # Signals for NLP popups
+    met = fetch_met_eireann_forecast(county)
+    epa = fetch_epa_air_quality(county)
+    cso = fetch_cso_population(county)
+    signals = {"rain_mm_next24h": met.get("rain_mm_next24h", 0.0), "aqi": epa.get("aqi", 0), "population": cso.get("population", 0)}
+    nlp = NLPPopup()
+
     fmap = folium.Map(location=[lat, lon], zoom_start=10, tiles="CartoDB positron")
 
     # Overlays
@@ -405,23 +456,46 @@ with col_map:
         groups[lname] = fg
         fmap.add_child(fg)
 
-    # Demo POIs (synthetic)
+    # Demo POIs (synthetic around centroid for now) + dynamic NLP popups
     rng = np.random.default_rng(42)
     def jitter(n=6, r=0.08):
         return [(lat + float(rng.normal(0, r)), lon + float(rng.normal(0, r))) for _ in range(n)]
+
+    # Hospitals
     for p in jitter(6, 0.03):
-        folium.Marker(p, tooltip="Hospital", icon=folium.Icon(icon="plus", prefix="fa", color="red")).add_to(groups["hospitals"])
+        html = nlp.generate(county, "hospital", signals)
+        folium.Marker(p, tooltip="Hospital", popup=folium.Popup(html, max_width=320), icon=folium.Icon(icon="plus", prefix="fa", color="red")).add_to(groups["hospitals"])
+        if draw_legs:
+            leg_html = nlp.generate(county, "leg: centroid→hospital", signals, {"distance_km": round(math.dist([lat,lon],[p[0],p[1]])*110,2)})
+            folium.PolyLine([(lat, lon), p], weight=1.5, opacity=0.7, tooltip="Leg", popup=folium.Popup(leg_html, max_width=300)).add_to(groups["hospitals"])
+
+    # Shelters (clustered)
     mc = MarkerCluster().add_to(groups["shelters"])
     for p in jitter(10, 0.05):
-        folium.Marker(p, tooltip="Shelter", icon=folium.Icon(color="green")).add_to(mc)
+        html = nlp.generate(county, "shelter", signals)
+        folium.Marker(p, tooltip="Shelter", popup=folium.Popup(html, max_width=320), icon=folium.Icon(color="green")).add_to(mc)
+        if draw_legs:
+            leg_html = nlp.generate(county, "leg: centroid→shelter", signals, {"distance_km": round(math.dist([lat,lon],[p[0],p[1]])*110,2)})
+            folium.PolyLine([(lat, lon), p], weight=1.2, opacity=0.6, tooltip="Leg", popup=folium.Popup(leg_html, max_width=300)).add_to(groups["shelters"])
+
+    # Substations
     for p in jitter(5, 0.04):
-        folium.CircleMarker(p, radius=6, tooltip="Substation").add_to(groups["substations"])
-    folium.PolyLine([(lat-0.02, lon-0.06), (lat, lon), (lat+0.02, lon+0.05)], tooltip="Bus route").add_to(groups["bus_routes"])
+        html = nlp.generate(county, "substation", signals)
+        folium.CircleMarker(p, radius=6, tooltip="Substation", popup=folium.Popup(html, max_width=320)).add_to(groups["substations"])
+        if draw_legs:
+            leg_html = nlp.generate(county, "leg: centroid→substation", signals, {"distance_km": round(math.dist([lat,lon],[p[0],p[1]])*110,2)})
+            folium.PolyLine([(lat, lon), p], weight=1.2, dash_array="4,3", opacity=0.6, tooltip="Whisker", popup=folium.Popup(leg_html, max_width=300)).add_to(groups["substations"])
+
+    # Bus route with NLP popup
+    route_pts = [(lat-0.02, lon-0.06), (lat, lon), (lat+0.02, lon+0.05)]
+    route_html = nlp.generate(county, "bus route", signals, {"stops": 3})
+    folium.PolyLine(route_pts, tooltip="Bus route", popup=folium.Popup(route_html, max_width=320)).add_to(groups["bus_routes"])
 
     # Draw tool for what‑if
     Draw(export=True, filename="drawn.geojson").add_to(fmap)
 
-    folium.Marker([lat, lon], tooltip=f"{county}", popup=f"Selected: {county}").add_to(fmap)
+    centroid_html = nlp.generate(county, "centroid", signals)
+    folium.Marker([lat, lon], tooltip=f"{county}", popup=folium.Popup(centroid_html, max_width=320), icon=folium.Icon(color="blue")).add_to(fmap)
     folium.LayerControl(collapsed=False).add_to(fmap)
     map_state = st_folium(fmap, height=560, width=None)
 
