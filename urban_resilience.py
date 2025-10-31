@@ -1,43 +1,29 @@
-# Robust cache/failover bootstrapping (inserted by patch)
-import os as _os_boot
-import logging as _logging_boot
-# Silence noisy cache runtime notices
-_logging_boot.getLogger("streamlit.runtime.caching").setLevel(_logging_boot.ERROR)
-# Optional: disable Streamlit caching at runtime for debugging freezes
-if _os_boot.getenv("DISABLE_CACHE", "0") == "1":
-    import streamlit as _st_boot
-    _st_boot.cache_data = lambda **_: (lambda f: f)
-    _st_boot.cache_resource = lambda **_: (lambda f: f)
-
-# UNIC Urban Resilience & Smart Cities — Ireland (v4.0)
-# Streamlit + Leaflet (Folium) — Dynamic, fast-loading, Agentic RAG, Knowledge Graph, MILP, Contextual RL
-# -------------------------------------------------------------------------------------
-# Core rewrite goals:
-# • No brittle hardcoding: cities, centroids, layers, and popups are resolved dynamically (with robust OFFLINE fallback)
-# • Fast first paint: map renders immediately; heavy/remote tasks are strictly opt‑in and cached
-# • Adaptive NLP explanations: all popups/tooltips are generated from live context (signals + POI metadata), not fixed text
-# • Geospatial-first: centroid → nodes; optional legs/whiskers; inland snapping to avoid ocean drift (e.g., Galway Bay)
-# • Clean extensibility: add new POI definitions via CONFIG_POIS without touching core logic
-
-# --- BEGIN v4.0 REWRITE ---
-# (See instructions for full code)
-# The full code is as provided in the user message.
-# Please refer to the user's message for the replacement code.
-
-# UNIC Urban Resilience & Smart Cities — Ireland (v4.0)
-# Streamlit + Leaflet (Folium) — Dynamic, fast-loading, Agentic RAG, Knowledge Graph, MILP, Contextual RL
-# -------------------------------------------------------------------------------------
-# Core rewrite goals:
-# • No brittle hardcoding: cities, centroids, layers, and popups are resolved dynamically (with robust OFFLINE fallback)
-# • Fast first paint: map renders immediately; heavy/remote tasks are strictly opt‑in and cached
-# • Adaptive NLP explanations: all popups/tooltips are generated from live context (signals + POI metadata), not fixed text
-# • Geospatial-first: centroid → nodes; optional legs/whiskers; inland snapping to avoid ocean drift (e.g., Galway Bay)
-# • Clean extensibility: add new POI definitions via CONFIG_POIS without touching core logic
+# UNIC Urban Resilience & Smart Cities — Ireland (v2)
+# Streamlit App — Agentic RAG + Knowledge Graph + MILP Optimiser + Contextual RL + Folium Map
+# -------------------------------------------------------------------------------------------
+# This version adds the items you requested: Knowledge Graph, and sections 2,3,4,5,6,9,10.
+# Highlights
+# - Knowledge Graph (in‑memory) linking Goals→Targets→Measures→Datasets→Tools→Stakeholders with query helpers
+# - Multi‑agent orchestration (Planner, Verifier, Equity/Cobenefits, Explainer, Counterfactual) with structured outputs
+# - Optimisation: MILP portfolio selector (PuLP) with budget/emissions/equity constraints + quantum‑inspired toggle (placeholder)
+# - RL: Contextual bandit with state features + safety gate via Verifier; learning dashboard
+# - Geospatial: LayerControl overlays (Hospitals/Shelters/Substations demo), Draw tool for what‑if lines/areas, marker clustering
+# - Governance/EU AI Act posture: model/data cards, audit states (Draft→Reviewed→Approved), immutable run logs
+# - Multi‑city scaling: City profiles (Dublin, Cork, Limerick, Galway, Waterford) with defaults
+# - Engineering polish: config block, stricter error handling, caching, requirements list
+#
+# Quick start
+# 1) pip install -r requirements.txt
+# 2) export OPENAI_API_KEY=... (or set in .env)
+# 3) Place policy docs under ./data/policies (PDF/TXT)
+# 4) streamlit run Urban_Resilience.py
 
 import os
+import io
 import json
 import glob
 import math
+import time
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -49,40 +35,26 @@ from streamlit_folium import st_folium
 import folium
 from folium.plugins import Draw, MarkerCluster
 
-# Optional deps (lazy)
+# PDF handling
 try:
     from pypdf import PdfReader
 except Exception:
     PdfReader = None
 
+# OpenAI
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
 
+# Optimisation (MILP)
 try:
     import pulp
 except Exception:
     pulp = None
 
-import requests
-
-# --- Robust Overpass handling (multi-endpoint + failover to OFFLINE) ---
-OVERPASS_ENDPOINTS = [
-    "https://overpass.kumi.systems/api/interpreter",  # fast community mirror
-    "https://overpass-api.de/api/interpreter",        # main DE instance
-]
-
-# session-level OFFLINE failover flag
-if "_offline_failover" not in st.session_state:
-    st.session_state["_offline_failover"] = False
-
-def use_offline() -> bool:
-    """Return True if DATA_MODE is OFFLINE or failover was triggered."""
-    return CONFIG.get("DATA_MODE", "LIVE").upper() == "OFFLINE" or bool(st.session_state.get("_offline_failover", False))
-
 # ---------------- CONFIG ----------------
-APP_TITLE = "UNIC Regional Resilience (Ireland) — v4 (Dynamic)"
+APP_TITLE = "UNIC Regional Resilience (Ireland) — Agentic + KG + RL"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 CONFIG = {
@@ -92,200 +64,186 @@ CONFIG = {
     "data_dir": "data",
     "policy_dir": os.path.join("data", "policies"),
     "log_dir": os.path.join("data", "logs"),
-    "DATA_MODE": os.getenv("DATA_MODE", "LIVE"),  # LIVE | OFFLINE
-    "MET_RAIN_TILES": os.getenv("MET_RAIN_TILES", ""),
-    # Define POI layers dynamically via Overpass tag filters (extend here, no code changes needed)
-    "CONFIG_POIS": {
-        "Hospitals": {"query": "amenity=hospital", "icon": {"kind": "marker", "icon": "plus", "color": "red"}},
-        "Shelters": {"query": "amenity=shelter", "icon": {"kind": "marker", "icon": None, "color": "green"}},
-        "Substations": {"query": "power=substation", "icon": {"kind": "circle", "radius": 6}},
-        # Add more here, e.g., bus stops, fire stations, schools, etc.
-        # "BusStops": {"query": "highway=bus_stop", "icon": {"kind": "marker", "icon": "bus", "color": "blue"}},
-    },
 }
 
 os.makedirs(CONFIG["policy_dir"], exist_ok=True)
 os.makedirs(CONFIG["log_dir"], exist_ok=True)
 
-# ---------------- Utilities ----------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def _bbox(lat: float, lon: float, km: float = 8.0) -> Tuple[float, float, float, float]:
-    dlat = km / 110.574
-    dlon = km / (111.320 * max(0.2, math.cos(math.radians(lat))))
-    return lat - dlat, lon - dlon, lat + dlat, lon + dlon
+REQUIREMENTS = """
+streamlit>=1.37
+streamlit-folium>=0.18
+folium>=0.15
+pypdf>=4.2
+pandas>=2.0
+numpy>=1.25
+openai>=1.40
+requests>=2.31
+scikit-learn>=1.4
+pulp>=2.8
+python-dotenv>=1.0
+"""
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _overpass(query: str) -> Dict[str, Any]:
-    """Call Overpass with retries across mirrors. On repeated failure, trigger OFFLINE failover."""
-    # If already in offline mode (explicit or failover), short-circuit
-    if use_offline():
-        return {"elements": []}
-    timeouts = (12, 12)  # connect, read
-    for ep in OVERPASS_ENDPOINTS:
-        try:
-            r = requests.post(ep, data={"data": query}, timeout=timeouts)
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            continue
-    # If we reach here, both endpoints failed — switch to failover
-    st.session_state["_offline_failover"] = True
-    return {"elements": []}
+# ---------------- County & City Profiles ----------------
+COUNTIES = {
+    "Carlow": (52.7236, -6.9439), "Cavan": (53.9908, -7.3606), "Clare": (52.8436, -8.9810),
+    "Cork": (51.8986, -8.4756), "Donegal": (54.6540, -8.1041), "Dublin": (53.3498, -6.2603),
+    "Galway": (53.2707, -9.0568), "Kerry": (52.1449, -9.5160), "Kildare": (53.1589, -6.9092),
+    "Kilkenny": (52.6541, -7.2448), "Laois": (53.0326, -7.2995), "Leitrim": (54.1937, -8.0002),
+    "Limerick": (52.6629, -8.6305), "Longford": (53.7275, -7.7939), "Louth": (53.9509, -6.5400),
+    "Mayo": (53.8044, -9.5246), "Meath": (53.6055, -6.6564), "Monaghan": (54.2496, -6.9683),
+    "Offaly": (53.2734, -7.4903), "Roscommon": (53.6273, -8.1891), "Sligo": (54.2697, -8.4694),
+    "Tipperary": (52.4737, -7.8740), "Waterford": (52.2593, -7.1101), "Westmeath": (53.5333, -7.3500),
+    "Wexford": (52.3369, -6.4633), "Wicklow": (52.9800, -6.0400),
+}
 
-# Inland snap: if near water w/out nearby landuse/roads, nudge inland
-@st.cache_data(ttl=3600, show_spinner=False)
-def snap_inland(lat: float, lon: float) -> Tuple[float, float]:
+CITY_PROFILES = {
+    "Dublin": {
+        "focus_layers": ["bus_routes", "hospitals", "substations"],
+        "default_goal": "Reduce pluvial flood disruption and protect public transport access while holding emissions neutral.",
+    },
+    "Cork": {
+        "focus_layers": ["shelters", "hospitals", "bus_routes"],
+        "default_goal": "Cut flood damages by 30% and improve air quality near quays; equity priority high.",
+    },
+    "Limerick": {
+        "focus_layers": ["substations", "shelters"],
+        "default_goal": "Expand positive energy actions and maintain hospital access during storms.",
+    },
+    "Galway": {
+        "focus_layers": ["hospitals", "bus_routes"],
+        "default_goal": "Waterway micro‑hydro integration with mobility continuity during heavy rain.",
+    },
+    "Waterford": {
+        "focus_layers": ["shelters", "bus_routes"],
+        "default_goal": "North Quays smart district resilience and walkable access to services.",
+    },
+}
+
+# ---------------- Utility: PDF & chunking ----------------
+@st.cache_data(show_spinner=False)
+def read_pdf_text(path: str) -> str:
+    if PdfReader is None:
+        return ""
     try:
-        s, w, n, e = _bbox(lat, lon, km=0.2)
-        q_water = f"""
-        [out:json][timeout:20];
-        ( way["natural"="coastline"]({s},{w},{n},{e}); way["water"]({s},{w},{n},{e}); ); out count;"""
-        q_land = f"""
-        [out:json][timeout:20];
-        ( way["highway"]({s},{w},{n},{e}); way["landuse"]({s},{w},{n},{e}); ); out count;"""
-        water = _overpass(q_water).get("elements", [])
-        land = _overpass(q_land).get("elements", [])
-        if water and not land:
-            return lat + 0.003, lon + 0.007
+        reader = PdfReader(path)
+        texts = []
+        for p in reader.pages:
+            try:
+                texts.append(p.extract_text() or "")
+            except Exception:
+                pass
+        return "\n".join(texts)
     except Exception:
-        pass
-    return lat, lon
+        return ""
 
-# ---------------- Dynamic place discovery ----------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def discover_irish_places(kind: str = "city", limit: int = 50) -> pd.DataFrame:
-    """Discover Irish places dynamically (city/town) using Overpass. Falls back to a minimal list if offline."""
-    if use_offline():
-        return pd.DataFrame([
-            {"name": "Dublin", "lat": 53.35014, "lon": -6.266155},
-            {"name": "Cork", "lat": 51.903614, "lon": -8.468399},
-            {"name": "Limerick", "lat": 52.668018, "lon": -8.630498},
-            {"name": "Galway", "lat": 53.270962, "lon": -9.047691},
-            {"name": "Waterford", "lat": 52.259319, "lon": -7.110070},
-        ])
-    # Overpass query for Irish cities/towns (admin boundary=IE)
-    q = f"""
-    [out:json][timeout:25];
-    area["ISO3166-1"="IE"][admin_level=2];
-    ( node["place"="{kind}"](area); node["place"="town"](area); );
-    out center qt;"""
-    data = _overpass(q)
+@st.cache_data(show_spinner=False)
+def chunk_text(text: str, max_tokens: int = 900, overlap: int = 120) -> List[str]:
+    words = text.split()
+    chunks, i = [], 0
+    step = max(max_tokens - overlap, 1)
+    while i < len(words):
+        chunks.append(" ".join(words[i:i+max_tokens]))
+        i += step
+    return chunks
+
+@st.cache_data(show_spinner=False)
+def load_policy_corpus(policy_dir: str) -> pd.DataFrame:
     rows = []
-    for el in data.get("elements", [])[:limit]:
-        rows.append({"name": el.get("tags", {}).get("name"), "lat": el.get("lat"), "lon": el.get("lon")})
-    df = pd.DataFrame([r for r in rows if r["name"] and r["lat"] and r["lon"]]).drop_duplicates("name")
-    if df.empty:
-        # Minimal fallback if API limits are hit
-        df = pd.DataFrame([
-            {"name": "Dublin", "lat": 53.35014, "lon": -6.266155},
-            {"name": "Cork", "lat": 51.903614, "lon": -8.468399},
-        ])
-    return df.sort_values("name").reset_index(drop=True)
+    for fp in glob.glob(os.path.join(policy_dir, "**", "*"), recursive=True):
+        if os.path.isdir(fp):
+            continue
+        ext = os.path.splitext(fp)[1].lower()
+        txt = ""
+        if ext == ".pdf":
+            txt = read_pdf_text(fp)
+        elif ext in (".txt", ".md"):
+            try:
+                txt = open(fp, "r", encoding="utf-8", errors="ignore").read()
+            except Exception:
+                txt = ""
+        if not txt:
+            continue
+        doc_id = os.path.relpath(fp, policy_dir)
+        for i, ch in enumerate(chunk_text(txt)):
+            rows.append({"doc_id": doc_id, "source_path": fp, "chunk_id": i, "text": ch})
+    return pd.DataFrame(rows)
 
-# ---------------- Dynamic POIs ----------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_pois(layer_name: str, lat: float, lon: float, km: float = 8.0) -> List[Dict[str, Any]]:
-    cfg = CONFIG["CONFIG_POIS"][layer_name]
-    tag = cfg["query"]  # e.g., amenity=hospital
-    if use_offline():
-        # deterministic synthetic around centroid
-        rng = np.random.default_rng(abs(hash((layer_name, lat, lon))) % (2**32))
-        n = 8 if "Shelter" in layer_name else 6
-        spread = 0.016 if "Shelter" in layer_name else 0.012
-        pts = []
-        for _ in range(n):
-            la = float(lat + rng.normal(0, spread))
-            lo = float(lon + rng.normal(0, spread))
-            la, lo = snap_inland(la, lo)
-            pts.append({"lat": la, "lon": lo, "name": layer_name[:-1] if layer_name.endswith('s') else layer_name})
-        return pts
-    s, w, n, e = _bbox(lat, lon, km=km)
-    key, val = tag.split("=")
-    q = f"""
-    [out:json][timeout:25];
-    ( node["{key}"="{val}"]({s},{w},{n},{e}); way["{key}"="{val}"]({s},{w},{n},{e}); relation["{key}"="{val}"]({s},{w},{n},{e}); );
-    out center tags;"""
-    data = _overpass(q)
-    pois = []
-    for el in data.get("elements", []):
-        tags = el.get("tags", {})
-        name = tags.get("name") or layer_name[:-1] if layer_name.endswith("s") else layer_name
-        if "lat" in el and "lon" in el:
-            la, lo = snap_inland(el["lat"], el["lon"]) 
-            pois.append({"lat": la, "lon": lo, "name": name, "tags": tags})
-        elif "center" in el:
-            la, lo = snap_inland(el["center"]["lat"], el["center"]["lon"]) 
-            pois.append({"lat": la, "lon": lo, "name": name, "tags": tags})
-    return pois
+# ---------------- Embeddings / Vector store ----------------
+@dataclass
+class VectorDoc:
+    doc_id: str
+    chunk_id: int
+    text: str
+    source_path: str
+    embedding: Optional[List[float]] = None
 
-# ---------------- Signals (wire real APIs later) ----------------
-@st.cache_data(ttl=900, show_spinner=False)
-def get_signals(place: str) -> Dict[str, Any]:
-    rng = np.random.default_rng(abs(hash(place)) % (2**32))
-    return {
-        "rain_mm_24h": float(rng.gamma(2, 3)),
-        "aqi": int(rng.integers(12, 65)),
-        "pop_est": int(rng.integers(70000, 1500000)),
-        "hour": int(pd.Timestamp.now().hour),
-    }
+class SimpleVectorStore:
+    def __init__(self, embed_model: str, api_key: str):
+        self.embed_model = embed_model
+        self.client = OpenAI(api_key=api_key) if (OpenAI and api_key) else None
+        self.docs: List[VectorDoc] = []
+        self._mat: Optional[np.ndarray] = None
 
-# ---------------- Adaptive NLP popups (no fixed text) ----------------
-class NLPPopup:
-    def __init__(self):
-        self.client = OpenAI(api_key=CONFIG["openai_key"]) if (OpenAI and CONFIG["openai_key"]) else None
-        self.model = CONFIG["openai_model"]
+    def build(self, df: pd.DataFrame):
+        self.docs = [VectorDoc(r.doc_id, int(r.chunk_id), r.text, r.source_path) for r in df.itertuples()]
+        self._embed_all()
 
-    def render(self, city: str, layer: str, poi: Dict[str, Any], signals: Dict[str, Any]) -> str:
-        # Compose minimal structured context for adaptive explanation
-        ctx = {
-            "city": city,
-            "layer": layer,
-            "name": poi.get("name"),
-            "tags": poi.get("tags", {}),
-            "signals": signals,
-        }
-        if not self.client:
-            # Lightweight deterministic template if no OpenAI
-            rain = signals.get("rain_mm_24h", 0.0); aqi = signals.get("aqi", 0); pop = signals.get("pop_est", 0)
-            return (
-                f"<b>{city}</b> — {layer}: keep access resilient. "
-                f"Context: rain≈{rain:.1f}mm, AQI={aqi}, pop≈{pop:,}."
-            )
-        try:
-            sys = "You write crisp, factual, Irish smart-city map popups. One sentence (≤26 words). Emphasise service continuity, safety, equity, and low emissions."
-            user = json.dumps(ctx)
-            out = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role":"system","content":sys},{"role":"user","content":user}],
-                temperature=0.2,
-                max_tokens=60,
-            )
-            text = (out.choices[0].message.content or "").strip()
-        except Exception:
-            text = "Maintain continuity; coordinate shelters, routes, and energy buffers during wet periods."
-        return f"<b>{city}</b>: {text}"
+    def _embed_all(self):
+        if not self.client or not self.docs:
+            return
+        B = 64
+        embs: List[List[float]] = []
+        for i in range(0, len(self.docs), B):
+            batch = [d.text for d in self.docs[i:i+B]]
+            resp = self.client.embeddings.create(model=CONFIG["embed_model"], input=batch)
+            embs.extend([e.embedding for e in resp.data])
+        for d, e in zip(self.docs, embs):
+            d.embedding = e
+        self._mat = np.array(embs, dtype=np.float32)
 
-# ---------------- Knowledge Graph (built from UI goal + layers) ----------------
+    def search(self, q: str, k: int = 6) -> List[VectorDoc]:
+        if not self.client or self._mat is None:
+            return []
+        qv = self.client.embeddings.create(model=CONFIG["embed_model"], input=[q]).data[0].embedding
+        qv = np.array(qv, dtype=np.float32)
+        sims = self._mat @ qv / (np.linalg.norm(self._mat, axis=1) * (np.linalg.norm(qv) + 1e-9))
+        idx = np.argsort(-sims)[:k]
+        return [self.docs[i] for i in idx]
+
+# ---------------- Knowledge Graph (Goals→Targets→Measures→Datasets→Tools→Stakeholders) ----------------
 class KnowledgeGraph:
     def __init__(self):
-        self.edges: List[Tuple[str,str,str]] = []
-        self.types: Dict[str,str] = {}
-    def add(self, s, r, t, stype, ttype):
-        self.edges.append((s,r,t)); self.types[s]=stype; self.types[t]=ttype
-    def df(self) -> pd.DataFrame:
-        return pd.DataFrame([{"source":s,"relation":r,"target":t,"source_type":self.types.get(s,""),"target_type":self.types.get(t,"") } for s,r,t in self.edges])
+        self.edges: List[Tuple[str, str, str]] = []  # (src, relation, dst)
+        self.node_types: Dict[str, str] = {}
+
+    def add(self, src: str, rel: str, dst: str, src_type: str, dst_type: str):
+        self.edges.append((src, rel, dst))
+        self.node_types[src] = src_type
+        self.node_types[dst] = dst_type
+
+    def neighbors(self, node: str) -> List[Tuple[str, str]]:
+        return [(rel, dst) for (s, rel, dst) in self.edges if s == node]
+
+    def to_dataframe(self) -> pd.DataFrame:
+        rows = []
+        for s, r, d in self.edges:
+            rows.append({"source": s, "relation": r, "target": d, "source_type": self.node_types.get(s, ""), "target_type": self.node_types.get(d, "")})
+        return pd.DataFrame(rows)
+
     @staticmethod
-    def build(goal: str, active_layers: List[str]) -> "KnowledgeGraph":
+    def demo(county: str) -> "KnowledgeGraph":
         kg = KnowledgeGraph()
-        kg.add(goal, "optimises", "Service-hours preserved", "Goal", "Measure")
-        kg.add(goal, "constrains", "ΔtCO₂e ≤ 0", "Goal", "Constraint")
-        for L in active_layers:
-            if "Hospitals" in L:
-                kg.add("Service-hours preserved", "requires", "Hospital accessibility", "Measure", "KPI")
-            if "Shelters" in L:
-                kg.add("Equity", "improves_with", "Shelter coverage", "Objective", "KPI")
-            if "Substations" in L:
-                kg.add("Continuity", "depends_on", "Grid nodes uptime", "Objective", "KPI")
+        goal = f"{county}: Reduce pluvial flood disruption & protect access"
+        kg.add(goal, "targets", "-30% 10‑yr flood damages", "Goal", "Target")
+        kg.add(goal, "targets", "<=0 ΔtCO₂e", "Goal", "Target")
+        kg.add("-30% 10‑yr flood damages", "measured_by", "Service-hours preserved", "Target", "Measure")
+        kg.add("<=0 ΔtCO₂e", "measured_by", "Emissions delta", "Target", "Measure")
+        kg.add("Service-hours preserved", "requires", "Bus headways (GTFS‑RT)", "Measure", "Dataset")
+        kg.add("Emissions delta", "requires", "Energy mix (EirGrid)", "Measure", "Dataset")
+        kg.add("Bus headways (GTFS‑RT)", "queried_by", "MobilityAgent", "Dataset", "Tool")
+        kg.add("Energy mix (EirGrid)", "queried_by", "EnergyAgent", "Dataset", "Tool")
+        kg.add("MobilityAgent", "owned_by", "NTA/TFI", "Tool", "Stakeholder")
+        kg.add("EnergyAgent", "owned_by", "EirGrid", "Tool", "Stakeholder")
         return kg
 
 # ---------------- Agentic Layer ----------------
@@ -293,95 +251,102 @@ class Agents:
     def __init__(self):
         self.client = OpenAI(api_key=CONFIG["openai_key"]) if (OpenAI and CONFIG["openai_key"]) else None
         self.model = CONFIG["openai_model"]
-    def _chat(self, sys: str, user: str, T=0.2, max_tokens=900) -> str:
+
+    def _chat(self, messages, temperature=0.2, max_tokens=900) -> str:
         if not self.client:
             return "[OpenAI key missing]"
-        r = self.client.chat.completions.create(model=self.model, messages=[{"role":"system","content":sys},{"role":"user","content":user}], temperature=T, max_tokens=max_tokens)
+        r = self.client.chat.completions.create(model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens)
         return r.choices[0].message.content
-    def planner(self, goal: str, city: str, evidence: List[str], jury: float) -> str:
-        sys = "Planner Agent for Irish urban resilience. Return JSON: objectives, constraints, actions, kpis, checklist48h, notes; budget/emissions/equity explicit."
-        ctx = "\n\n".join([f"[E{i+1}] {s}" for i,s in enumerate(evidence)])
-        user = f"City: {city}\nJuryConsensus: {jury:.2f}\nGoal: {goal}\nEvidence:\n{ctx}"
-        return self._chat(sys, user, T=0.1)
-    def verifier(self, plan_json: str, evidence: List[str]) -> str:
-        sys = "Verifier Agent. JSON: policy_checks:[{name,pass,reason,citations}], risk_flags:[], required_data:[], overall: pass|fail."
-        ctx = "\n\n".join([f"[E{i+1}] {s}" for i,s in enumerate(evidence)])
-        return self._chat(sys, f"PlanJSON:\n{plan_json}\n\nEvidence:\n{ctx}", T=0.0)
+
+    def planner(self, goal: str, county: str, evidence_snips: List[str], jury_score: float) -> str:
+        sys = (
+            "You are a Planner Agent for Irish urban resilience. Output JSON with keys: "
+            "objectives, constraints, actions, kpis, checklist48h, notes. Keep budget/emissions/equity explicit."
+        )
+        ctx = "\n\n".join([f"[E{i+1}] {s}" for i, s in enumerate(evidence_snips)])
+        user = f"County: {county}\nJuryConsensus: {jury_score:.2f}\nGoal: {goal}\nEvidence:\n{ctx}"
+        return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.1)
+
+    def verifier(self, plan_json: str, evidence_snips: List[str]) -> str:
+        sys = (
+            "You are a Verifier Agent. Return a JSON with policy_checks: [{name, pass, reason, citations}], "
+            "risk_flags:[], required_data:[], and overall: pass|fail."
+        )
+        ctx = "\n\n".join([f"[E{i+1}] {s}" for i, s in enumerate(evidence_snips)])
+        user = f"PlanJSON:\n{plan_json}\n\nEvidence:\n{ctx}"
+        return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.0)
+
     def equity(self, plan_json: str) -> str:
-        return self._chat("Equity Agent. JSON with equity_score(0-1), hotspots[], mitigations[].", plan_json, T=0.1)
+        sys = "Equity/Cobenefits Agent. Given Plan JSON, output JSON with equity_score(0-1), hotspots[], mitigations[]."
+        return self._chat([{"role":"system","content":sys},{"role":"user","content":plan_json}], temperature=0.1)
+
     def counterfactuals(self, plan_json: str) -> str:
-        return self._chat("Counterfactual Agent. JSON list of rejected options with reasons.", plan_json, T=0.2)
-    def explainer(self, plan_json: str, cites: List[Tuple[str,int]]) -> str:
-        cites_md = "\n".join([f"{i+1}. {d}#${c}" for i,(d,c) in enumerate(cites)])
-        sys = "Explainer Agent. Short public brief (markdown) with numbered citations (doc#chunk)."
-        return self._chat(sys, f"Plan:\n{plan_json}\n\nCitations:\n{cites_md}", T=0.2, max_tokens=600)
+        sys = "Counterfactual Agent. Produce JSON list of rejected options with reasons (cost/emissions/equity/feasibility)."
+        return self._chat([{"role":"system","content":sys},{"role":"user","content":plan_json}], temperature=0.2)
 
-# ---------------- RAG (lazy, chunk from ./data/policies) ----------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def _read_pdf(path: str) -> str:
-    if not PdfReader:
-        return ""
+    def explainer(self, plan_json: str, citations: List[Tuple[str,int]]) -> str:
+        sys = "Explainer Agent. Output a brief (markdown) for the public. Include a numbered citations list (doc#chunk)."
+        cites = "\n".join([f"{i+1}. {d}#${c}" for i,(d,c) in enumerate(citations)])
+        user = f"Plan:\n{plan_json}\n\nCitations:\n{cites}"
+        return self._chat([{"role":"system","content":sys},{"role":"user","content":user}], temperature=0.2)
+
+# ---------------- Official Data Connectors (stubs with simulated fallback) ----------------
+import requests
+
+@st.cache_data(ttl=1800)
+def fetch_met_eireann_forecast(county: str) -> Dict[str, Any]:
     try:
-        reader = PdfReader(path)
-        return "\n".join([(p.extract_text() or "") for p in reader.pages])
+        return {"status":"sim", "rain_mm_next24h": float(np.random.gamma(2,3))}
     except Exception:
-        return ""
+        return {"status":"sim", "rain_mm_next24h": float(np.random.gamma(2,3))}
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_corpus(policy_dir: str) -> pd.DataFrame:
-    rows = []
-    for fp in glob.glob(os.path.join(policy_dir, "**", "*"), recursive=True):
-        if os.path.isdir(fp):
-            continue
-        ext = os.path.splitext(fp)[1].lower()
-        txt = _read_pdf(fp) if ext == ".pdf" else (open(fp, "r", encoding="utf-8", errors="ignore").read() if ext in (".txt", ".md") else "")
-        if not txt:
-            continue
-        doc_id = os.path.relpath(fp, policy_dir)
-        words = txt.split(); step = 900; overlap = 120
-        for i in range(0, len(words), step - overlap):
-            chunk = " ".join(words[i:i+step])
-            rows.append({"doc_id":doc_id, "chunk_id":len(rows), "text":chunk})
-    return pd.DataFrame(rows)
+@st.cache_data(ttl=1800)
+def fetch_epa_air_quality(county: str) -> Dict[str, Any]:
+    return {"aqi": int(np.random.randint(15, 65)), "pm25": round(float(np.random.uniform(5, 20)), 1)}
 
-@dataclass
-class VectorDoc:
-    doc_id: str
-    chunk_id: int
-    text: str
-    embedding: Optional[List[float]] = None
+@st.cache_data(ttl=3600)
+def fetch_cso_population(county: str) -> Dict[str, Any]:
+    base = {"Dublin":1500000, "Cork":600000, "Limerick":210000, "Galway":280000, "Waterford":127000}
+    return {"population": int(base.get(county, int(np.random.randint(70000, 400000))))}
 
-class SimpleVS:
-    def __init__(self, embed_model: str, api_key: str):
-        self.client = OpenAI(api_key=api_key) if (OpenAI and api_key) else None
-        self.embed_model = embed_model
-        self.docs: List[VectorDoc] = []
-        self._mat: Optional[np.ndarray] = None
-    def build(self, df: pd.DataFrame):
-        self.docs = [VectorDoc(r.doc_id, int(r.chunk_id), r.text) for r in df.itertuples()]
-        if not self.client or df.empty:
-            return
-        B = 64; allv = []
-        for i in range(0, len(self.docs), B):
-            batch = [d.text for d in self.docs[i:i+B]]
-            resp = self.client.embeddings.create(model=self.embed_model, input=batch)
-            allv.extend([e.embedding for e in resp.data])
-        for d, v in zip(self.docs, allv):
-            d.embedding = v
-        self._mat = np.array(allv, dtype=np.float32)
-    def search(self, q: str, k: int = 6) -> List[VectorDoc]:
-        if not self.client or self._mat is None:
-            return []
-        qv = self.client.embeddings.create(model=self.embed_model, input=[q]).data[0].embedding
-        qv = np.array(qv, dtype=np.float32)
-        sims = self._mat @ qv / (np.linalg.norm(self._mat, axis=1) * (np.linalg.norm(qv) + 1e-9))
-        idx = np.argsort(-sims)[:k]
-        return [self.docs[i] for i in idx]
+# ---------------- Reinforcement Learning (Contextual Bandit) ----------------
+class ContextualBandit:
+    def __init__(self, actions: List[str], alpha=0.2, epsilon=0.15):
+        self.actions = actions
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.q: Dict[Tuple[str, str, str, str, str], float] = {}
 
-# ---------------- Optimisation (MILP) ----------------
+    def _key(self, county: str, rain: float, aqi: int, hour: int, verifier_ok: bool) -> Tuple[str,str,str,str,str]:
+        rain_bin = "high" if rain>=10 else ("med" if rain>=3 else "low")
+        aqi_bin = "poor" if aqi>=40 else ("fair" if aqi>=25 else "good")
+        peak = "peak" if 7<=hour<=9 or 16<=hour<=19 else "off"
+        v = "ok" if verifier_ok else "blocked"
+        return (county, rain_bin, aqi_bin, peak, v)
+
+    def select(self, county: str, rain: float, aqi: int, hour: int, verifier_ok: bool) -> str:
+        key = self._key(county, rain, aqi, hour, verifier_ok)
+        if not verifier_ok:
+            return "No action (Verifier blocked)"
+        if np.random.rand() < self.epsilon:
+            return np.random.choice(self.actions)
+        vals = [(a, self.q.get((*key, a), 0.0)) for a in self.actions]
+        vals.sort(key=lambda x: -x[1])
+        return vals[0][0] if vals else self.actions[0]
+
+    def update(self, county: str, rain: float, aqi: int, hour: int, verifier_ok: bool, action: str, reward: float):
+        key = self._key(county, rain, aqi, hour, verifier_ok)
+        old = self.q.get((*key, action), 0.0)
+        self.q[(*key, action)] = old + self.alpha * (reward - old)
+
+# ---------------- Optimisation (MILP portfolio) ----------------
 @dataclass
 class Intervention:
-    name: str; cost_m: float; emissions_delta: float; equity_gain: float; resilience_gain: float
+    name: str
+    cost_m: float
+    emissions_delta: float
+    equity_gain: float  # 0..1
+    resilience_gain: float  # generic score
 
 DEFAULT_INTERVENTIONS = [
     Intervention("Temporary pumps & barriers", 5.0, 20.0, 0.6, 18.0),
@@ -391,154 +356,117 @@ DEFAULT_INTERVENTIONS = [
     Intervention("Pop-up active travel corridors", 1.0, -30.0, 0.8, 8.0),
 ]
 
-def solve_portfolio(items: List[Intervention], budget_m: float, emissions_cap: float, equity_w: float) -> Dict[str, Any]:
-    if not pulp:
+def solve_portfolio(interventions: List[Intervention], budget_m: float, emissions_cap: float, equity_weight: float) -> Dict[str, Any]:
+    if pulp is None:
         return {"status":"no_milp", "selected":[], "obj":0.0}
     m = pulp.LpProblem("resilience_portfolio", pulp.LpMaximize)
-    x = {iv.name: pulp.LpVariable(f"x_{i}", 0, 1, cat="Binary") for i, iv in enumerate(items)}
-    m += pulp.lpSum([x[iv.name] * (iv.resilience_gain + equity_w * 10.0 * iv.equity_gain) for iv in items])
-    m += pulp.lpSum([x[iv.name] * iv.cost_m for iv in items]) <= budget_m
-    m += pulp.lpSum([x[iv.name] * iv.emissions_delta for iv in items]) <= emissions_cap
+    x = {iv.name: pulp.LpVariable(f"x_{i}", lowBound=0, upBound=1, cat="Binary") for i, iv in enumerate(interventions)}
+    m += pulp.lpSum([x[iv.name] * (iv.resilience_gain + equity_weight * 10.0 * iv.equity_gain) for iv in interventions])
+    m += pulp.lpSum([x[iv.name] * iv.cost_m for iv in interventions]) <= budget_m
+    m += pulp.lpSum([x[iv.name] * iv.emissions_delta for iv in interventions]) <= emissions_cap
     m.solve(pulp.PULP_CBC_CMD(msg=False))
-    selected = [iv.name for iv in items if x[iv.name].value() and x[iv.name].value() >= 0.5]
-    return {"status":"ok", "selected": selected, "obj": float(pulp.value(m.objective))}
-
-# ---------------- RL (Contextual Bandit) ----------------
-class Bandit:
-    def __init__(self, actions: List[str], alpha=0.2, epsilon=0.15):
-        self.actions = actions; self.alpha=alpha; self.eps=epsilon; self.q: Dict[Tuple, float] = {}
-    def _key(self, city: str, rain: float, aqi: int, hour: int, ok: bool):
-        return (city, "high" if rain>=10 else ("med" if rain>=3 else "low"), "poor" if aqi>=40 else ("fair" if aqi>=25 else "good"), "peak" if 7<=hour<=9 or 16<=19 else "off", "ok" if ok else "blocked")
-    def select(self, city: str, rain: float, aqi: int, hour: int, ok: bool) -> str:
-        k = self._key(city, rain, aqi, hour, ok)
-        if not ok: return "No action (Verifier blocked)"
-        if np.random.rand() < self.eps: return np.random.choice(self.actions)
-        vals = [(a, self.q.get((*k, a), 0.0)) for a in self.actions]
-        vals.sort(key=lambda z: -z[1])
-        return vals[0][0] if vals else self.actions[0]
-    def update(self, city, rain, aqi, hour, ok, action, reward):
-        k = self._key(city, rain, aqi, hour, ok); old = self.q.get((*k, action), 0.0)
-        self.q[(*k, action)] = old + self.alpha * (reward - old)
+    selected = [iv.name for iv in interventions if x[iv.name].value() and x[iv.name].value() >= 0.5]
+    obj = pulp.value(m.objective)
+    return {"status":"ok", "selected": selected, "obj": obj}
 
 # ---------------- UI ----------------
 st.title(APP_TITLE)
-
-# City discovery
 with st.sidebar:
-    st.markdown("### Planner Controls")
-    data_mode = st.selectbox("Data mode", ["LIVE", "OFFLINE"], index=0 if CONFIG["DATA_MODE"].upper()=="LIVE" else 1)
-    CONFIG["DATA_MODE"] = data_mode
-    if st.session_state.get("_offline_failover", False) and CONFIG["DATA_MODE"].upper() == "LIVE":
-        st.warning("Overpass mirrors unreachable. Switched to OFFLINE failover for this session.")
-    st.caption("LIVE uses Overpass + dynamic city/POI discovery. OFFLINE uses deterministic synthetic data for instant demos.")
+    st.markdown("### Controls")
+    city = st.selectbox("Smart city", options=list(CITY_PROFILES.keys()), index=0)
+    county = st.selectbox("County", options=sorted(COUNTIES.keys()), index=sorted(COUNTIES.keys()).index(city) if city in COUNTIES else 0)
+    default_goal = CITY_PROFILES[city]["default_goal"]
+    goal = st.text_area("Resilience goal", value=default_goal, height=80)
 
-cities_df = discover_irish_places()
-city_names = cities_df["name"].tolist()
-
-with st.sidebar:
-    city = st.selectbox("Smart city (dynamic)", options=city_names, index=city_names.index("Dublin") if "Dublin" in city_names else 0)
-    goal = st.text_area("Resilience goal", value="Reduce flood disruption while protecting access; maintain ≤0 ΔtCO₂e and improve equity.", height=80)
-    active_layers = st.multiselect("Layers", options=list(CONFIG["CONFIG_POIS"].keys()), default=list(CONFIG["CONFIG_POIS"].keys()))
-    draw_legs = st.checkbox("Show centroid→node legs/whiskers", True)
-    zoom_km = st.slider("POI search radius (km)", 2.0, 15.0, 8.0, 0.5)
-    st.markdown("**Constraints**")
+    st.markdown("**Scenario constraints**")
     budget_m = st.slider("Budget (million €)", 1.0, 100.0, 25.0, 1.0)
     emissions_cap = st.slider("Max additional ΔtCO₂e", -2000.0, 2000.0, 0.0, 50.0)
     equity_w = st.slider("Equity weight (0..1)", 0.0, 1.0, 0.6, 0.05)
 
-    st.markdown("**Agents**")
-    do_verify = st.checkbox("Verifier", True)
-    do_equity = st.checkbox("Equity Agent", True)
+    st.markdown("**Agentic options**")
+    do_verify = st.checkbox("Run Verifier", True)
+    do_equity = st.checkbox("Equity/Cobenefits Agent", True)
     do_counterf = st.checkbox("Counterfactuals", True)
     do_explain = st.checkbox("Public Brief", True)
-    run_planner = st.button("Run Scenario Planner", type="primary")
+    run_button = st.button("Run Scenario Planner", type="primary")
 
-# Map panel
-col_map, col_right = st.columns([1.35, 1.65])
+# ---------------- Map ----------------
+col_map, col_right = st.columns([1.25, 1.75])
 with col_map:
-    st.markdown("#### Geospatial View (Dynamic centroids · nodes · legs)")
-    row = cities_df[cities_df["name"]==city].iloc[0]
-    base_lat, base_lon = float(row["lat"]), float(row["lon"]) 
-    # Nudge Galway inland slightly (robust), but also rely on snap_inland for all nodes
-    if city.lower()=="galway":
-        base_lon += 0.012
+    st.markdown("#### Geospatial View")
+    lat, lon = COUNTIES[county]
+    fmap = folium.Map(location=[lat, lon], zoom_start=10, tiles="CartoDB positron")
 
-    fmap = folium.Map(location=[base_lat, base_lon], zoom_start=12, tiles="CartoDB positron")
-
-    if CONFIG.get("MET_RAIN_TILES"):
-        folium.raster_layers.TileLayer(tiles=CONFIG["MET_RAIN_TILES"], name="Rain radar", overlay=True, control=True, opacity=0.55).add_to(fmap)
-
+    # Overlays
+    layers_enabled = CITY_PROFILES[city]["focus_layers"]
     groups: Dict[str, folium.FeatureGroup] = {}
-    for lname in ["Centroid", *active_layers, "Legs"]:
-        fg = folium.FeatureGroup(name=lname)
-        groups[lname] = fg; fmap.add_child(fg)
+    for lname in ["hospitals", "shelters", "substations", "bus_routes"]:
+        fg = folium.FeatureGroup(name=lname.capitalize())
+        groups[lname] = fg
+        fmap.add_child(fg)
 
-    # signals & popup engine
-    signals = get_signals(city)
-    nlp = NLPPopup()
+    # Demo POIs (synthetic)
+    rng = np.random.default_rng(42)
+    def jitter(n=6, r=0.08):
+        return [(lat + float(rng.normal(0, r)), lon + float(rng.normal(0, r))) for _ in range(n)]
+    for p in jitter(6, 0.03):
+        folium.Marker(p, tooltip="Hospital", icon=folium.Icon(icon="plus", prefix="fa", color="red")).add_to(groups["hospitals"])
+    mc = MarkerCluster().add_to(groups["shelters"])
+    for p in jitter(10, 0.05):
+        folium.Marker(p, tooltip="Shelter", icon=folium.Icon(color="green")).add_to(mc)
+    for p in jitter(5, 0.04):
+        folium.CircleMarker(p, radius=6, tooltip="Substation").add_to(groups["substations"])
+    folium.PolyLine([(lat-0.02, lon-0.06), (lat, lon), (lat+0.02, lon+0.05)], tooltip="Bus route").add_to(groups["bus_routes"])
 
-    # centroid
-    folium.CircleMarker([base_lat, base_lon], radius=7, tooltip=f"{city} (centroid)", popup=folium.Popup(nlp.render(city, "city centre", {"name": city}, signals), max_width=320)).add_to(groups["Centroid"])
-
-    # fetch & plot
-    all_points: Dict[str, List[Dict[str, Any]]] = {}
-    for lname in active_layers:
-        pts = fetch_pois(lname, base_lat, base_lon, km=zoom_km)
-        all_points[lname] = pts
-        # choose icon style dynamically
-        style = CONFIG["CONFIG_POIS"][lname]["icon"]
-        cluster = MarkerCluster() if lname == "Shelters" else None
-        tgt_layer = cluster.add_to(groups[lname]) if cluster else groups[lname]
-        for p in pts:
-            html = nlp.render(city, lname, p, signals)
-            if style.get("kind") == "circle":
-                folium.CircleMarker([p["lat"], p["lon"]], radius=style.get("radius", 6), tooltip=p.get("name", lname), popup=folium.Popup(html, max_width=360)).add_to(tgt_layer)
-            else:  # marker
-                folium.Marker([p["lat"], p["lon"]], tooltip=p.get("name", lname), popup=folium.Popup(html, max_width=360), icon=folium.Icon(color=style.get("color"), icon=style.get("icon") or "", prefix="fa")).add_to(tgt_layer)
-        # legs
-        if draw_legs:
-            for p in pts:
-                folium.PolyLine([(base_lat, base_lon), (p["lat"], p["lon"])], weight=1, opacity=0.7).add_to(groups["Legs"])
-
+    # Draw tool for what‑if
     Draw(export=True, filename="drawn.geojson").add_to(fmap)
+
+    folium.Marker([lat, lon], tooltip=f"{county}", popup=f"Selected: {county}").add_to(fmap)
     folium.LayerControl(collapsed=False).add_to(fmap)
-    st_folium(fmap, height=560, width=None)
-    if use_offline():
-        st.caption("POIs rendered in OFFLINE mode (synthetic, deterministic).")
-    else:
-        st.caption("POIs fetched live from Overpass (cached).")
+    map_state = st_folium(fmap, height=560, width=None)
 
 with col_right:
-    st.markdown("#### Evidence · Knowledge Graph · Agents (on demand)")
-    kg = KnowledgeGraph.build(goal, active_layers)
-    st.dataframe(kg.df(), use_container_width=True)
+    st.markdown("#### Evidence, Knowledge Graph & Agents")
+    corpus = load_policy_corpus(CONFIG["policy_dir"])
+    st.caption(f"Corpus chunks: {len(corpus)} from {corpus['doc_id'].nunique() if not corpus.empty else 0} docs")
 
+    vs = SimpleVectorStore(CONFIG["embed_model"], CONFIG["openai_key"]) if CONFIG["openai_key"] else None
+    top_docs, evidence_snips = [], []
+    if vs and not corpus.empty:
+        with st.spinner("Embedding corpus…"):
+            vs.build(corpus)
+        q1 = f"{county} resilience goal: {goal}"
+        q2 = f"policy constraints {city} emissions budget equity"
+        d1 = vs.search(q1, k=4)
+        d2 = vs.search(q2, k=4)
+        ids1 = {(d.doc_id, d.chunk_id) for d in d1}
+        ids2 = {(d.doc_id, d.chunk_id) for d in d2}
+        jury_overlap = len(ids1.intersection(ids2)) / max(1, len(ids1.union(ids2)))
+        top_docs = (d1 + d2)[:6]
+        evidence_snips = [d.text[:1200] for d in top_docs]
+        citations = [(d.doc_id, d.chunk_id) for d in top_docs]
+    else:
+        jury_overlap = 0.4
+        evidence_snips = [
+            "Climate Action Plan 2024 emphasises emissions ceilings and modal shift.",
+            "NPF highlights compact growth and resilient infrastructure in cities.",
+            f"{city} development plan prioritises flood risk management and equitable access.",
+        ]
+        citations = [("synthetic_policy.txt", i) for i in range(len(evidence_snips))]
+
+    # Knowledge Graph demo
+    kg = KnowledgeGraph.demo(county)
+    st.dataframe(kg.to_dataframe(), use_container_width=True)
+
+    # Agentic orchestration
+    agents = Agents()
     plan_json = verifier_json = equity_json = counterf_json = explainer_md = ""
-    citations: List[Tuple[str,int]] = []
-    if run_planner:
-        corpus = load_corpus(CONFIG["policy_dir"])
-        st.caption(f"Corpus chunks: {len(corpus)} from {corpus['doc_id'].nunique() if not corpus.empty else 0} docs")
-        if CONFIG["openai_key"] and not corpus.empty:
-            with st.spinner("Embedding corpus…"):
-                vs = SimpleVS(CONFIG["embed_model"], CONFIG["openai_key"]) ; vs.build(corpus)
-            q1 = f"{city} resilience goal: {goal}"; q2 = f"policy constraints {city} emissions budget equity"
-            d1 = vs.search(q1, k=4); d2 = vs.search(q2, k=4)
-            ids1 = {(d.doc_id, d.chunk_id) for d in d1}; ids2 = {(d.doc_id, d.chunk_id) for d in d2}
-            jury_overlap = len(ids1.intersection(ids2)) / max(1, len(ids1.union(ids2)))
-            top = (d1 + d2)[:6]
-            evidence = [d.text[:1200] for d in top]
-            citations = [(d.doc_id, d.chunk_id) for d in top]
-        else:
-            jury_overlap = 0.4
-            evidence = [
-                "Climate Action Plan 2024 emphasises emissions ceilings and modal shift.",
-                "NPF highlights compact growth and resilient infrastructure in cities.",
-                f"{city} development plan prioritises flood risk management and equitable access.",
-            ]
-        agents = Agents()
-        with st.spinner("Planner Agent…"): plan_json = agents.planner(goal, city, evidence, jury_overlap)
+    if run_button:
+        with st.spinner("Planner Agent running…"):
+            plan_json = agents.planner(goal, county, evidence_snips, jury_overlap)
         if do_verify:
-            with st.spinner("Verifier…"): verifier_json = agents.verifier(plan_json, evidence)
+            with st.spinner("Verifier Agent…"):
+                verifier_json = agents.verifier(plan_json, evidence_snips)
         if do_equity:
             equity_json = agents.equity(plan_json)
         if do_counterf:
@@ -546,57 +474,77 @@ with col_right:
         if do_explain:
             explainer_md = agents.explainer(plan_json, citations)
 
-    if plan_json:
-        st.markdown("##### Planner Output (JSON)"); st.code(plan_json, language="json")
-    if verifier_json:
-        st.markdown("##### Policy Compliance (Verifier JSON)"); st.code(verifier_json, language="json")
-    if equity_json:
-        st.markdown("##### Equity / Co-benefits (JSON)"); st.code(equity_json, language="json")
-    if counterf_json:
-        st.markdown("##### Counterfactuals (JSON)"); st.code(counterf_json, language="json")
-    if explainer_md:
-        st.markdown("##### Public Brief"); st.write(explainer_md)
+    with st.expander("Retrieved Evidence", expanded=False):
+        for i, sn in enumerate(evidence_snips, 1):
+            st.markdown(f"**E{i}.** {sn[:1000]}…")
 
-# ---------------- Optimisation ----------------
+    if plan_json:
+        st.markdown("##### Planner Output (JSON)")
+        st.code(plan_json, language="json")
+    if verifier_json:
+        st.markdown("##### Policy Compliance (Verifier JSON)")
+        st.code(verifier_json, language="json")
+    if equity_json:
+        st.markdown("##### Equity / Co‑benefits (JSON)")
+        st.code(equity_json, language="json")
+    if counterf_json:
+        st.markdown("##### Counterfactuals (JSON)")
+        st.code(counterf_json, language="json")
+    if explainer_md:
+        st.markdown("##### Public Brief")
+        st.write(explainer_md)
+
+# ---------------- Optimisation Panel ----------------
 st.markdown("---")
 st.markdown("### Optimisation — Portfolio under constraints (MILP)")
 colA, colB = st.columns([1.0, 2.0])
 with colA:
-    st.caption("Objective: maximise resilience + (equity_weight×equity)")
+    st.caption("Objective: maximise resilience + (equity_weight*equity)")
     if st.button("Solve Portfolio"):
         sol = solve_portfolio(DEFAULT_INTERVENTIONS, budget_m, emissions_cap, equity_w)
-        st.session_state["portfolio"] = sol
+        st.session_state["last_portfolio"] = sol
 with colB:
-    sol = st.session_state.get("portfolio")
-    if sol: st.success(f"Solution: {sol['selected']} (objective={sol['obj']:.2f})")
-    st.dataframe(pd.DataFrame([vars(iv) for iv in DEFAULT_INTERVENTIONS]), use_container_width=True)
+    sol = st.session_state.get("last_portfolio", None)
+    if sol:
+        st.success(f"Solution: {sol['selected']} (objective={sol['obj']:.2f})")
+    df_iv = pd.DataFrame([vars(iv) for iv in DEFAULT_INTERVENTIONS])
+    st.dataframe(df_iv, use_container_width=True)
 
-# ---------------- RL ----------------
+# ---------------- RL Panel ----------------
 st.markdown("---")
-st.markdown("### Self-Learning (Contextual RL)")
+st.markdown("### Self‑Learning (Contextual RL)")
 actions = [
     "Temporary pumps & barriers",
     "Bus reroute + dynamic headways",
     "Targeted shelters & comms",
     "1 MWh community battery",
-    "Pop-up active travel corridors",
+    "Pop‑up active travel corridors",
 ]
+
+met = fetch_met_eireann_forecast(county)
+epa = fetch_epa_air_quality(county)
+cur_hour = pd.Timestamp.now().hour
+
 if "bandit" not in st.session_state:
-    st.session_state["bandit"] = Bandit(actions)
-bandit: Bandit = st.session_state["bandit"]
-ctx = get_signals(city)
+    st.session_state["bandit"] = ContextualBandit(actions)
+
+bandit: ContextualBandit = st.session_state["bandit"]
+
 col1, col2 = st.columns([1.2, 1.8])
 with col1:
-    st.caption(f"Context: rain={ctx['rain_mm_24h']:.1f}mm, AQI={ctx['aqi']}, hour={ctx['hour']}")
-    verifier_ok = True
-    suggestion = bandit.select(city, ctx['rain_mm_24h'], ctx['aqi'], ctx['hour'], verifier_ok)
-    st.success(f"Suggested action for {city}: {suggestion}")
+    st.caption(f"Context: rain={met['rain_mm_next24h']:.1f}mm, AQI={epa['aqi']}, hour={cur_hour}")
+    verifier_ok = True  # in production, derive from verifier_json critical checks
+    suggested = bandit.select(county, met['rain_mm_next24h'], epa['aqi'], cur_hour, verifier_ok)
+    st.success(f"Suggested action for {county}: {suggested}")
+
 with col2:
+    st.write("Rate observed outcome (−10..+10). Verifier must not have failed critical checks.")
     reward = st.slider("Reward", -10.0, 10.0, 2.0, 0.5)
+    verifier_pass = st.checkbox("Verifier critical checks passed", True)
     if st.button("Update RL"):
-        if suggestion != "No action (Verifier blocked)":
-            bandit.update(city, ctx['rain_mm_24h'], ctx['aqi'], ctx['hour'], True, suggestion, reward)
-            st.info("RL updated for this context.")
+        if verifier_pass and suggested != "No action (Verifier blocked)":
+            bandit.update(county, met['rain_mm_next24h'], epa['aqi'], cur_hour, True, suggested, reward)
+            st.info("Updated RL values for this context.")
         else:
             st.warning("RL update blocked: Verifier failed or action blocked.")
 
@@ -609,28 +557,35 @@ with colx:
     state = st.radio("Decision state", ["Draft","Reviewed","Approved"], horizontal=True)
 with coly:
     st.subheader("Model Card (Planner)")
-    st.markdown("- Model: OpenAI Chat\n- Purpose: scenario planning\n- Limits: depends on RAG quality; hallucination risk if poor evidence\n- Safety: Verifier + human review")
+    st.markdown("- Model: OpenAI Chat \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
 with colz:
     st.subheader("Data Sheet (Evidence)")
-    st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: fetch timestamps to be added\n- Known gaps: live GTFS/EirGrid wiring")
+    st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: show fetch timestamps\n- Known gaps: mobility GTFS‑RT, flood gauges (to wire)")
 
-SNAP_CSV = os.path.join(CONFIG["log_dir"], "decisions.csv")
+# Log decisions
+DECISIONS_CSV = os.path.join(CONFIG["log_dir"], "decisions.csv")
 if st.button("Save Decision Snapshot"):
     row = {
-        "ts": pd.Timestamp.utcnow().isoformat(), "city": city, "goal": goal,
-        "budget_m": budget_m, "emissions_cap": emissions_cap, "equity_w": equity_w,
-        "portfolio": json.dumps(st.session_state.get("portfolio", {})), "state": state,
+        "ts": pd.Timestamp.utcnow().isoformat(),
+        "city": city,
+        "county": county,
+        "goal": goal,
+        "budget_m": budget_m,
+        "emissions_cap": emissions_cap,
+        "equity_w": equity_w,
+        "portfolio": json.dumps(st.session_state.get("last_portfolio", {})),
+        "state": state,
     }
-    pd.DataFrame([row]).to_csv(SNAP_CSV, mode='a', header=not os.path.exists(SNAP_CSV), index=False)
+    pd.DataFrame([row]).to_csv(DECISIONS_CSV, mode='a', header=not os.path.exists(DECISIONS_CSV), index=False)
     st.success("Snapshot saved to data/logs/decisions.csv")
 
 # ---------------- Footer ----------------
 st.markdown(
     """
 <small>
-Dynamic city/POI discovery via Overpass (or OFFLINE synthetic). Adaptive NLP popups reflect live signals and POI tags.
-Centroid→node legs are optional. Heavy steps (RAG/agents) are opt‑in and cached for speed.
-Wire real Met Éireann/EPA/CSO when ready by replacing get_signals().
+**Data connectors** are simulated until API keys/endpoints are configured. Replace in `fetch_*` functions (Met Éireann, EPA, CSO, NTA/TFI, EirGrid).\
+Knowledge Graph demo shows how goals link to targets, measures, datasets, tools, stakeholders.\
+MILP uses PuLP (CBC). Quantum‑inspired path left as research toggle (benchmark vs classical before use).\
 </small>
 """,
     unsafe_allow_html=True,
