@@ -246,6 +246,59 @@ class KnowledgeGraph:
         kg.add("EnergyAgent", "owned_by", "EirGrid", "Tool", "Stakeholder")
         return kg
 
+# ---------------- Agentic Layer ----------------
+class Agents:
+    def __init__(self):
+        # Use OpenAI only if the SDK and key are available; otherwise return safe fallbacks.
+        self.client = OpenAI(api_key=CONFIG["openai_key"]) if (OpenAI and CONFIG["openai_key"]) else None
+        self.model = CONFIG["openai_model"]
+
+    def _chat(self, messages, temperature: float = 0.2, max_tokens: int = 900) -> str:
+        if not self.client:
+            return "[OpenAI key missing]"
+        try:
+            r = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return r.choices[0].message.content
+        except Exception as e:
+            return f"[Agent error: {e}]"
+
+    def planner(self, goal: str, county: str, evidence_snips: List[str], jury_score: float) -> str:
+        sys = (
+            "You are a Planner Agent for Irish urban resilience. Output JSON with keys: "
+            "objectives, constraints, actions, kpis, checklist48h, notes. Keep budget/emissions/equity explicit."
+        )
+        ctx = "\n\n".join([f"[E{i+1}] {s}" for i, s in enumerate(evidence_snips)])
+        user = f"County: {county}\nJuryConsensus: {jury_score:.2f}\nGoal: {goal}\nEvidence:\n{ctx}"
+        return self._chat([{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.1)
+
+    def verifier(self, plan_json: str, evidence_snips: List[str]) -> str:
+        sys = (
+            "You are a Verifier Agent. Return a JSON with policy_checks: [{name, pass, reason, citations}], "
+            "risk_flags:[], required_data:[], and overall: pass|fail."
+        )
+        ctx = "\n\n".join([f"[E{i+1}] {s}" for i, s in enumerate(evidence_snips)])
+        user = f"PlanJSON:\n{plan_json}\n\nEvidence:\n{ctx}"
+        return self._chat([{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.0)
+
+    def equity(self, plan_json: str) -> str:
+        sys = "Equity/Cobenefits Agent. Given Plan JSON, output JSON with equity_score(0-1), hotspots[], mitigations[]."
+        return self._chat([{"role": "system", "content": sys}, {"role": "user", "content": plan_json}], temperature=0.1)
+
+    def counterfactuals(self, plan_json: str) -> str:
+        sys = "Counterfactual Agent. Produce JSON list of rejected options with reasons (cost/emissions/equity/feasibility)."
+        return self._chat([{"role": "system", "content": sys}, {"role": "user", "content": plan_json}], temperature=0.2)
+
+    def explainer(self, plan_json: str, citations: List[Tuple[str, int]]) -> str:
+        sys = "Explainer Agent. Output a brief (markdown) for the public. Include a numbered citations list (doc#chunk)."
+        cites = "\n".join([f"{i+1}. {d}#${c}" for i, (d, c) in enumerate(citations)])
+        user = f"Plan:\n{plan_json}\n\nCitations:\n{cites}"
+        return self._chat([{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.2)
+
 # ---------------- Official Data Connectors (stubs with simulated fallback) ----------------
 import requests
 
