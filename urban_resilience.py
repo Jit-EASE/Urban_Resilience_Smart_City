@@ -1,7 +1,7 @@
 # UNIC Urban Resilience & Smart Cities — Ireland (v2)
 # Streamlit App — Agentic RAG + Knowledge Graph + MILP Optimiser + Contextual RL + Folium Map
 # -------------------------------------------------------------------------------------------
-# This version adds the items you requested: Knowledge Graph, and sections 2,3,4,5,6,9,10.
+# Knowledge Graph, and sections 2,3,4,5,6,9,10.
 # Highlights
 # - Knowledge Graph (in‑memory) linking Goals→Targets→Measures→Datasets→Tools→Stakeholders with query helpers
 # - Multi‑agent orchestration (Planner, Verifier, Equity/Cobenefits, Explainer, Counterfactual) with structured outputs
@@ -11,12 +11,7 @@
 # - Governance/EU AI Act posture: model/data cards, audit states (Draft→Reviewed→Approved), immutable run logs
 # - Multi‑city scaling: City profiles (Dublin, Cork, Limerick, Galway, Waterford) with defaults
 # - Engineering polish: config block, stricter error handling, caching, requirements list
-#
-# Quick start
-# 1) pip install -r requirements.txt
-# 2) export OPENAI_API_KEY=... (or set in .env)
-# 3) Place policy docs under ./data/policies (PDF/TXT)
-# 4) streamlit run Urban_Resilience.py
+
 
 import os
 import io
@@ -54,7 +49,7 @@ except Exception:
     pulp = None
 
 # ---------------- CONFIG ----------------
-APP_TITLE = "UNIC Regional Resilience (Ireland) — Agentic + KG + RL"
+APP_TITLE = "Self Learning Regional Resilience System - Smart Cities : Ireland"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 CONFIG = {
@@ -405,7 +400,7 @@ with col_map:
         groups[lname] = fg
         fmap.add_child(fg)
 
-    # Demo POIs (synthetic)
+    # Demo POIs (simulated)
     rng = np.random.default_rng(42)
     def jitter(n=6, r=0.08):
         return [(lat + float(rng.normal(0, r)), lon + float(rng.normal(0, r))) for _ in range(n)]
@@ -452,7 +447,7 @@ with col_right:
             "NPF highlights compact growth and resilient infrastructure in cities.",
             f"{city} development plan prioritises flood risk management and equitable access.",
         ]
-        citations = [("synthetic_policy.txt", i) for i in range(len(evidence_snips))]
+        citations = [("simulated_policy.txt", i) for i in range(len(evidence_snips))]
 
     # Knowledge Graph demo
     kg = KnowledgeGraph.demo(county)
@@ -496,7 +491,7 @@ with col_right:
 
 # ---------------- Optimisation Panel ----------------
 st.markdown("---")
-st.markdown("### Optimisation — Portfolio under constraints (MILP)")
+st.markdown("### Optimisation — Portfolio under constraints")
 colA, colB = st.columns([1.0, 2.0])
 with colA:
     st.caption("Objective: maximise resilience + (equity_weight*equity)")
@@ -512,7 +507,7 @@ with colB:
 
 # ---------------- RL Panel ----------------
 st.markdown("---")
-st.markdown("### Self‑Learning (Contextual RL)")
+st.markdown("### Self‑Learning")
 actions = [
     "Temporary pumps & barriers",
     "Bus reroute + dynamic headways",
@@ -541,7 +536,7 @@ with col2:
     st.write("Rate observed outcome (−10..+10). Verifier must not have failed critical checks.")
     reward = st.slider("Reward", -10.0, 10.0, 2.0, 0.5)
     verifier_pass = st.checkbox("Verifier critical checks passed", True)
-    if st.button("Update RL"):
+    if st.button("Update Model"):
         if verifier_pass and suggested != "No action (Verifier blocked)":
             bandit.update(county, met['rain_mm_next24h'], epa['aqi'], cur_hour, True, suggested, reward)
             st.info("Updated RL values for this context.")
@@ -557,7 +552,7 @@ with colx:
     state = st.radio("Decision state", ["Draft","Reviewed","Approved"], horizontal=True)
 with coly:
     st.subheader("Model Card (Planner)")
-    st.markdown("- Model: OpenAI Chat \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
+    st.markdown("- Model: Agentic AI \n- Purpose: scenario planning \n- Limits: relies on RAG quality; hallucination risk if poor evidence \n- Safety: Verifier + human review")
 with colz:
     st.subheader("Data Sheet (Evidence)")
     st.markdown("- Sources: policy PDFs, official APIs\n- Freshness: show fetch timestamps\n- Known gaps: mobility GTFS‑RT, flood gauges (to wire)")
