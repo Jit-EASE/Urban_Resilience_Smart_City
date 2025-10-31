@@ -578,9 +578,8 @@ if st.button("Save Decision Snapshot"):
 st.markdown(
     """
 <small>
-**Data connectors** are simulated until API keys/endpoints are configured. Replace in `fetch_*` functions (Met Éireann, EPA, CSO, NTA/TFI, EirGrid).\
-Knowledge Graph demo shows how goals link to targets, measures, datasets, tools, stakeholders.\
-MILP uses PuLP (CBC). Quantum‑inspired path left as research toggle (benchmark vs classical before use).\
+** Developed by Shubhoijit Bagchi.\
+K
 </small>
 """,
     unsafe_allow_html=True,
